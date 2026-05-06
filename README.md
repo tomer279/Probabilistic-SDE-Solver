@@ -33,9 +33,9 @@ You can select the backend via `SDESolverConfig.method` in the unified `solve_sd
 From the project root:
 
 ```bash
-pip install -e .
+py -m pip install -e .
 # with dev dependencies:
-pip install -e ".[dev]"
+py -m pip install -e ".[dev]"
 ```
 
 Requirements: **Python ≥ 3.9**, **JAX** (and **jaxlib**), **NumPy**, **matplotlib**, **tqdm**.
@@ -100,8 +100,20 @@ traj = result.trajectory
 
 ## Tests
 
+From the project root:
+
 ```bash
-pytest  -v
+python -m pytest -q
+```
+
+Or on Windows (Python launcher):
+```bash
+py -m pytest -q
+```
+
+Run only test collection (useful for import/discovery checks):
+```bash
+python -m pytest --collect-only -q
 ```
 
 ## Examples

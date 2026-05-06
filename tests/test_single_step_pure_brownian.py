@@ -12,7 +12,9 @@ import jax.numpy as jnp
 
 from prob_sde import brownian_and_parabolic_coeffs
 from prob_sde import SDESpec, IWP2Prior
-from prob_sde.gaussian_sde_filter import GaussianSDEFilter, GaussianSDEFilterConfig
+from prob_sde.filtering.sde.gaussian_sde_filter import (
+    GaussianSDEFilter, GaussianSDEFilterConfig
+)
 
 
 def drift_zero(_x, _t):

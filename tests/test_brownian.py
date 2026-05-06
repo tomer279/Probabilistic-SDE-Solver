@@ -6,7 +6,7 @@ Covers: get_coeffs/eval_fn interface, variance of increment, continuity at bound
 
 import jax
 import jax.numpy as jnp
-from prob_sde.brownian import piecewise_linear_brownian
+from prob_sde import piecewise_linear_brownian
 
 
 def test_piecewise_linear_brownian_returns_two_callables():
