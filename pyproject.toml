@@ -38,7 +38,7 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/yourusername/prob_sde"
+Repository = "https://github.com/tomer279/Probabilistic-SDE-Solver"
 Documentation = "https://github.com/yourusername/prob_sde#readme"
 
 [tool.setuptools.packages.find]
