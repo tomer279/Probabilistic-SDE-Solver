@@ -202,6 +202,25 @@ python benchmarks/benes_sde/minimal_profiling.py
 
 See CHANGELOG.md for release history.
 
+## Contributing
+
+Contributions are welcome.
+
+If you would like to contribute:
+
+1. Fork the repository and create a feature branch.
+2. Make your changes with clear commit messages.
+3. Run tests locally before opening a pull request:
+   ```bash
+   pip install -e ".[dev]"
+   pytest -v
+4. Open a pull request describing:
+ - what changed,
+ - why it changed,
+ - and how it was tested,
+
+Please keep changes focused, add/update tests when relevant, and update documentation for user-facing changes.
+
 ## Reference
 
 - Paper: [arXiv:2401.03338](https://arxiv.org/abs/2401.03338)  
