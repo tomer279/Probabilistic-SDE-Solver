@@ -1,22 +1,37 @@
 # Benchmarks
 
-## Convergence
+This folder contains benchmark utilities and benchmark scripts.
 
-- **convergence_strong_weak.py**: Compares strong error at a fixed time for the pathwise probabilistic solver and Euler–Maruyama. Run with a fine reference path; errors are reported for several step counts. Expect strong convergence order around 0.5–1.0 for the probabilistic solver (paper: global order 1.0).
+## Contents
 
-  ```bash
-  cd benchmarks && python convergence_strong_weak.py
-  ```
+- `benchmark_utils.py`: shared helper functions used by benchmark scripts.
+- `benes_sde/`: Benes SDE benchmark suite:
+  - `benes_gsf_vs_em.py`
+  - `benes_mgsf_gsf_em.py`
+  - `benes_marginalised_gsf_em.py`
+  - `minimal_profiling.py`
 
-## Runtime
+## Running benchmarks
 
-- **runtime_benchmark.py**: Measures wall-clock time for 500 steps (pathwise solver vs Euler–Maruyama) after JIT compilation. Run from the project root or with `PYTHONPATH` including `src`.
+From the project root:
 
-  ```bash
-  cd benchmarks && python runtime_benchmark.py
-  ```
+```bash
+python benchmarks/benes_sde/benes_gsf_vs_em.py
+python benchmarks/benes_sde/benes_mgsf_gsf_em.py
+python benchmarks/benes_sde/benes_marginalised_gsf_em.py
+python benchmarks/benes_sde/minimal_profiling.py
+```
 
-## Interpreting results
+## Notes:
+- Some scripts require optional dependencies such as `matplotlib` and `tqdm`.
+- Outputs (plots/tables) are produced by the scripts themselves.
 
-- **Strong error**: Single-path difference vs a fine reference. Smaller step size should give smaller error; slope in log-log plot indicates convergence order.
-- **Runtime**: Pathwise solver does more work per step (ODE filter + Brownian sampling); use when uncertainty estimates are needed.
+## Benchmark roadmap
+
+Planned improvements:
+
+- Add additional benchmark problems beyond Benes SDE (e.g., linear SDEs, FitzHugh-Nagumo-type systems, and other nonlinear examples).
+- Improve runtime performance of benchmark scripts (especially Monte Carlo loops and repeated path construction).
+- Increase JAX-native vectorization to reduce Python-loop overhead and improve `jit`/`vmap` efficiency.
+- Standardize benchmark outputs (tables, plots, summary metrics) for easier method-to-method comparison.
+- Add reproducible benchmark presets (fixed seeds and documented configurations).

@@ -2,16 +2,31 @@
 
 Probabilistic numerical solvers for stochastic differential equations (SDEs) with pathwise uncertainty estimates. This package implements the methodology of **Le Fay, Särkkä & Corenflos (2025)**: [*Modelling pathwise uncertainty of Stochastic Differential Equations samplers via Probabilistic Numerics*](https://arxiv.org/abs/2401.03338), Bayesian Analysis (2025).
 
+## Status
+Alpha / research code. The public API may change.
+
 ## Summary
 
-The method turns an SDE into a **sequence of random ODEs** by replacing Brownian motion with a **piecewise differentiable approximation** on each time step. Each random ODE is solved with a **Gaussian ODE filter** (EKF0), yielding a pathwise solution with **uncertainty bands** (credible intervals). The paper establishes strong convergence orders (e.g. 1.5 local, 1.0 global for a specific instance) and shows how to **marginalise** over the Brownian approximation to compute exact transition densities.
+The method turns an SDE into a **sequence of random ODEs** by replacing Brownian motion with a **piecewise differentiable approximation** on each time step. Each random ODE is solved with a **Gaussian ODE filter** (EKF0/1), yielding a pathwise solution with **uncertainty bands** (credible intervals). The paper establishes strong convergence orders (e.g. 1.5 local, 1.0 global for a specific instance) and shows how to **marginalise** over the Brownian approximation to compute exact transition densities.
 
 ## Features
 
-- **Pathwise solver**: Piecewise linear (or polynomial) Brownian approximation + Gaussian ODE filter per step.
+- **Pathwise solver**: piecewise differentiable Brownian approximation + Gaussian ODE filter per step.
 - **Uncertainty bands**: Posterior mean and covariance from the filter at each step.
 - **Marginalised version**: Mean and variance by averaging over pathwise samples (optional exact transition densities via extended state).
-- **Benchmarks**: Strong/weak convergence and runtime vs Euler–Maruyama (and Milstein).
+- **Benchmarks**: strong/weak convergence and runtime comparisons (see `benchmarks/README.md`)
+
+## Methods
+
+This package provides three related probabilistic solvers for SDEs:
+
+- **Gaussian SDE Filter (GSF, Algorithm 2)**: propagates a single Gaussian latent state over the time grid. Produces one pathwise trajectory and can optionally return per-step latent posterior means/covariances (uncertainty).
+
+- **Mixture Gaussian SDE Filter (MGSF, Algorithm 3)**: a pathwise solver that samples Brownian-approximation coefficients per interval, builds a local random ODE, and performs a Gaussian ODE-filter update each step. Produces one trajectory (mean or sampled posterior position) and can optionally return uncertainty.
+
+- **Marginalised Gaussian SDE Filter (Algorithm 4)**: marginalises over Brownian-approximation randomness using an augmented Gaussian state and Monte Carlo aggregation. In this codebase it is currently **scalar-state** oriented.
+
+You can select the backend via `SDESolverConfig.method` in the unified `solve_sde(...)` facade (`"gsf"`, `"mgsf"`, or `"marginalised"`).
 
 ## Installation
 
@@ -19,62 +34,74 @@ From the project root:
 
 ```bash
 pip install -e .
-# with dev dependencies (pytest, matplotlib, ruff):
+# with dev dependencies:
 pip install -e ".[dev]"
 ```
 
-Requirements: **Python ≥ 3.9**, **JAX** (and **jaxlib**), **NumPy**.
+Requirements: **Python ≥ 3.9**, **JAX** (and **jaxlib**), **NumPy**, **matplotlib**, **tqdm**.
 
 ## Quick start
+
+See examples/ or benchmarks/ for runnable scripts.
 
 ```python
 import jax
 import jax.numpy as jnp
+
 from prob_sde import (
-    piecewise_linear_brownian,
-    IWP2Prior,
-    ode_integrator_factory,
-    solve_sde_pathwise,
+    SDESpec,
+    piecewise_parabolic_brownian,
+    SDESolverConfig,
+    TimeGridConfig,
+    solve_sde,
 )
 
 key = jax.random.PRNGKey(0)
+
 drift = lambda x, t: 0.1 * x
 diffusion = lambda x, t: 0.2
 x0 = jnp.array(1.0)
-prior = IWP2Prior(1.0)
-ode_int = ode_integrator_factory(prior)
 
-ts, trajectory = solve_sde_pathwise(
-    key, drift, diffusion, x0, piecewise_linear_brownian,
-    delta=0.01, num_steps=100, ode_integrator=ode_int
+sde = SDESpec(drift=drift, diffusion=diffusion, x0=x0, bm_factory=piecewise_parabolic_brownian)
+
+cfg = SDESolverConfig(
+    method="mgsf",
+    grid=TimeGridConfig(delta=0.01, num_steps=100),
 )
-# With uncertainty bands:
-ts, trajectory, (means, covs) = solve_sde_pathwise(
-    key, drift, diffusion, x0, piecewise_linear_brownian,
-    delta=0.01, num_steps=100, ode_integrator=ode_int, return_uncertainty=True
-)
+
+result = solve_sde(key=key, sde=sde, cfg=cfg)
+
+ts = result.ts
+traj = result.trajectory
 ```
 
 ## Project layout
 
 - **src/prob_sde/**: Core package  
-  - `brownian`: Piecewise differentiable BM approximation (`piecewise_linear_brownian`)  
-  - `prior_models`: State-space prior (`IWP2Prior`)  
-  - `ode_filter`: Gaussian ODE filter (`ode_filter_step`, `ode_integrator_factory`)  
-  - `sde_solver`: Pathwise SDE solver (`solve_sde_pathwise`)  
-  - `marginalised`: Marginalised solver (`solve_sde_marginalised`)  
-  - `utils`: Helpers (insert, time_grid, split_key)
+- `src/prob_sde/`: core package
+  - `__init__.py`: public API (top-level exports)
+  - `core/`
+    - `sde.py`: `SDESpec` (SDE specification container)
+    - `prior_models.py`: `IWPPrior`, `IWP2Prior`, `IWP3Prior`
+  - `brownian/`
+    - `brownian.py`: Brownian approximation factories (`piecewise_linear_brownian`, `piecewise_parabolic_brownian`)
+    - `pathwise_rhs.py`: per-interval random ODE RHS construction
+  - `filtering/`
+    - `ode/`: Gaussian ODE filter routines (e.g. `ode_filter_step`, `ode_integrator_factory`)
+    - `sde/`: SDE filtering algorithms (Gaussian / mixture / marginalised implementations)
+  - `solvers/`
+    - `sde_solver.py`: unified facade `solve_sde` + config/result dataclasses
+  - `mixture_utils/`: scan/rollout utilities used by mixture methods
+  - `utils/`: small helpers (`insert`, `time_grid`, `split_key`)
 - **examples/**: Scripts for pathwise and marginalised runs and uncertainty bands.
 - **benchmarks/**: Strong/weak convergence and runtime (see `benchmarks/README.md`).
+  - `benchmarks/benes_sde/` : Benes SDE benchmark scripts (EM vs GSF/MGSF/Marginalised)
 - **tests/**: Pytest suite.
 
 ## Tests
 
 ```bash
-# From project root, with src on PYTHONPATH:
-pytest tests/ -v
-# Or after pip install -e .:
-pytest tests/ -v
+pytest  -v
 ```
 
 ## Examples
@@ -82,12 +109,86 @@ pytest tests/ -v
 From the project root:
 
 ```bash
-python examples/scalar_sde_pathwise.py   # Path + uncertainty bands
-python examples/scalar_sde_marginalised.py
-python examples/uncertainty_bands_demo.py
+python examples/kalman_filter_demo.py
+python examples/kalman_car_demo.py
+python examples/extended_kalman_pendulum_demo.py
+python examples/extended_kalman_filter_turn_model_demo.py
+python examples/ode_filter_ekf0_demo.py
+python examples/brownian_algorithm1_accuracy.py
 ```
 
 (Requires `matplotlib` for plotting.)
+
+## Benchmarks
+
+See `benchmarks/benes_sde/` for Benes SDE experiments comparing Euler–Maruyama (EM) against the probabilistic solvers:
+
+```bash
+python benchmarks/benes_sde/benes_gsf_vs_em.py
+python benchmarks/benes_sde/benes_mgsf_gsf_em.py
+python benchmarks/benes_sde/benes_marginalised_gsf_em.py
+python benchmarks/benes_sde/minimal_profiling.py
+```
+
+## Roadmap
+
+### Near-term (next 1-2 releases)
+
+- **Performance baseline + profiling**
+  - Profile end-to-end runtime and per-method hotspots (GSF, MGSF, Marginalised).
+  - Prioritize optimization of marginalised workflows and Monte Carlo loops.
+
+- **JAX-native execution path**
+  - Migrate remaining non-JAX or partially NumPy/Python-loop code paths to JAX-native array operations.
+  - Improve compatibility with `jit` and `vmap` for batched experiments.
+
+- **Documentation and examples**
+  - Expand method-specific examples for `"gsf"`, `"mgsf"`, and `"marginalised"` via `solve_sde`.
+  - Add clear guidance on method selection and expected outputs (`trajectory`, `means/covs`, `mean_trajectory/var_trajectory`).
+
+- **Repository quality gates**
+  - Add CI (tests + lint) on pull requests and main branch updates.
+  - Add reproducible benchmark/test entry points for easier contribution.
+
+### Mid-term (next 3-6 releases)
+
+- **Benchmark expansion**
+  - Add benchmark suites beyond Benes SDE, including:
+    - linear SDEs
+    - FitzHugh-Nagumo-type systems
+    - additional nonlinear testbeds
+  - Compare methods across strong/weak error, runtime, and memory usage.
+
+- **Uncertainty calibration**
+  - Implement uncertainty calibration for affine SDEs (Section 3.4 of the paper).
+  - Add quantitative calibration diagnostics (e.g., empirical coverage vs nominal confidence).
+
+- **Reproducibility improvements**
+  - Add fixed-seed benchmark presets and standard output artifacts (figures/tables).
+  - Provide optional pinned environments for reproducible runs.
+
+- **Numerical diagnostics**
+  - Add diagnostics for covariance behavior, stability checks, and failure-mode tracing.
+  - Add regression-style tests for expected convergence trends.
+
+### Long-term (project maturity)
+
+- **User-facing interface**
+  - Build a Streamlit app for interactive solver configuration, trajectory visualization, and uncertainty inspection.
+
+- **API stabilization**
+  - Stabilize and version the high-level API (`SDESpec`, `SDESolverConfig`, `solve_sde`).
+  - Improve backward-compatibility policy and migration notes for users.
+
+- **Scalability and vectorization**
+  - Support larger batched experiments and higher-dimensional settings with better vectorized execution.
+  - Reduce host/device transfer overhead and improve throughput for research workloads.
+
+- **Documentation and adoption**
+  - Publish richer tutorials and “cookbook” style notebooks.
+  - Add contributor guides for extending methods and benchmarks.
+
+See CHANGELOG.md for release history.
 
 ## Reference
 
