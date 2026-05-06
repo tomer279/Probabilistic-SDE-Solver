@@ -1,6 +1,6 @@
 # Probabilistic SDE Solver
 
-Probabilistic numerical solvers for stochastic differential equations (SDEs) with pathwise uncertainty estimates. This package implements the methodology of **Le Fay, Särkkä & Corenflos (2025)**: [*Modelling pathwise uncertainty of Stochastic Differential Equations samplers via Probabilistic Numerics*](https://arxiv.org/abs/2401.03338), Bayesian Analysis (2025).
+Probabilistic numerical solvers for stochastic differential equations (SDEs) with pathwise uncertainty estimates. This package implements the methodology of **Le Fay, Särkkä & Corenflos**: [*Modelling pathwise uncertainty of Stochastic Differential Equations samplers via Probabilistic Numerics*](https://arxiv.org/abs/2401.03338), Bayesian Anal. Advance Publications 1-24 (2025).
 
 ## Status
 Alpha / research code. The public API may change.
