@@ -73,3 +73,4 @@ coverage.xml
 *.code-workspace
 
 examples/*.png
+benchmarks/benes_sde/*.png
