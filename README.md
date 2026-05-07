@@ -77,7 +77,7 @@ traj = result.trajectory
 
 ## Project layout
 
-- **src/prob_sde/**: Core package  
+
 - `src/prob_sde/`: core package
   - `__init__.py`: public API (top-level exports)
   - `core/`
@@ -133,14 +133,30 @@ python examples/brownian_algorithm1_accuracy.py
 
 ## Benchmarks
 
-See `benchmarks/benes_sde/` for Benes SDE experiments comparing Euler–Maruyama (EM) against the probabilistic solvers:
+See `benchmarks/benes_sde/` for Benes SDE experiments comparing Euler–Maruyama (EM) against the probabilistic solvers.
+
+For profiling/timing harness entry points (performance baseline), see `benchmarks/README.md`.
 
 ```bash
 python benchmarks/benes_sde/benes_gsf_vs_em.py
 python benchmarks/benes_sde/benes_mgsf_gsf_em.py
 python benchmarks/benes_sde/benes_marginalised_gsf_em.py
+
+# Profiling / timing harnesses (performance baseline)
+python benchmarks/benes_sde/end_to_end_matrix.py
+python benchmarks/benes_sde/section_timing_matrix.py
+python benchmarks/benes_sde/marginalised_scaling_bench.py
+python benchmarks/benes_sde/profile_marginalised_inner_solve.py
+python benchmarks/benes_sde/time_marginalised_ensemble_paths.py
+
+# Minimal marginalised-only timing
 python benchmarks/benes_sde/minimal_profiling.py
 ```
+
+### Notes
+- The first run includes JAX compilation; prefer comparing warm-run timings.
+- The profiling scripts fix mc.seed for reproducibility by default.
+- Default Monte Carlo settings can take many minutes on CPU.
 
 ## Roadmap
 

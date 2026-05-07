@@ -108,7 +108,7 @@ class MonteCarloConfig:
         Run-level random seed. If ``None``, a fresh seed is generated.
     """
 
-    num_sample_paths: int = 200
+    num_sample_paths: int = 500
     seed: Optional[int] = None
 
 

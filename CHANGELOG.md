@@ -2,10 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.1.1]
 
 ### Added
-- 
+- Add benchmark profiling harness scripts for the Benes SDE suite (end-to-end timing matrix, section timing matrix, marginalised scaling bench, and marginalised inner-solve/ensemble timing scripts).
 
 ### Changed
 - 
