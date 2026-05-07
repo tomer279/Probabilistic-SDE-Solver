@@ -76,7 +76,10 @@ from prob_sde import (
 from prob_sde.filtering.sde.gaussian_sde_filter import (
     GaussianSDEFilterConfig
 )
-from prob_sde.filtering.sde.marginalised import MarginalisedConfig
+from prob_sde.filtering.sde.marginalised import (
+    MarginalisedConfig,
+    solve_sde_marginalised_batch
+)
 
 from prob_sde.solvers.sde_solver import (
     TimeGridConfig,
@@ -98,7 +101,7 @@ class TimeConfig:
 class MonteCarloConfig:
     """Monte Carlo settings for averaging error statistics."""
 
-    num_sample_paths: int = 200
+    num_sample_paths: int = 500
     seed: Optional[int] = None
 
 
@@ -192,9 +195,13 @@ def weak_error_g_hat(diff_per_seed):
     return float(np.linalg.norm(mean_diff, ord="fro"))
 
 
-def one_seed_stats(root_key, delta, cfg):
-    """Per-seed strong errors + weak-g errors for EM/GSF/Marginalised."""
-    disc, x_ref, x_em, x_gsf, x_marg = _simulate_coupled_paths(root_key, delta, cfg)
+def one_seed_stats(root_key, delta, cfg, x_marg):
+    """Per-seed strong errors + weak-g errors with precomputed marginalised path."""
+    disc, x_ref, x_em, x_gsf = _simulate_coupled_non_marginalised_paths(
+        root_key,
+        delta,
+        cfg,
+    )
 
     strong = strong_errors_from_paths(x_ref, x_em, x_gsf, disc.block_size)
     ref_local = x_ref[disc.block_size]
@@ -207,8 +214,8 @@ def one_seed_stats(root_key, delta, cfg):
     return (*strong, *weak_em, *weak_gsf, *weak_marg)
 
 
-def _simulate_coupled_paths(root_key, delta, cfg):
-    """Return discretization and all paths needed for one-seed statistics."""
+def _simulate_coupled_non_marginalised_paths(root_key, delta, cfg):
+    """Return discretization, reference, EM, and GSF paths for one seed."""
     disc = prepare_coupled_discretization(root_key, delta, cfg.time.t_final)
     x_ref = euler_maruyama_from_increments(
         drift, diffusion, disc.dw_ref, disc.delta_ref, cfg.x0
@@ -223,8 +230,7 @@ def _simulate_coupled_paths(root_key, delta, cfg):
         disc.num_steps,
         disc.coeffs_list,
     )
-    x_marg = _marginalised_path(jax.random.fold_in(root_key, 2), delta, cfg)
-    return disc, x_ref, x_em, x_gsf, x_marg
+    return disc, x_ref, x_em, x_gsf
 
 
 def _weak_diffs_against_ref_local_global(x_scheme, ref_local, ref_global):
@@ -239,7 +245,11 @@ def estimate_errors_for_delta(base_key, delta, cfg, progress_bar=None):
     """Strong errors + article weak-g errors for one delta."""
     keys = jax.random.split(base_key, cfg.mc.num_sample_paths)
 
-    vals = _collect_seed_stats(keys, delta, cfg, progress_bar)
+    marg_keys = jax.vmap(lambda key_i: jax.random.fold_in(key_i, 2))(keys)
+    marg_paths = _marginalised_paths_batch(marg_keys, delta, cfg)
+    jax.block_until_ready(marg_paths)
+
+    vals = _collect_seed_stats(keys, marg_paths, delta, cfg, progress_bar)
 
     arr = np.asarray(vals, dtype=float)
 
@@ -261,10 +271,11 @@ def _weak_g_columns(arr, columns):
     return tuple(weak_error_g_hat(arr[:, col]) for col in columns)
 
 
-def _collect_seed_stats(keys, delta, cfg, progress_bar=None):
+def _collect_seed_stats(keys, marg_paths, delta, cfg, progress_bar=None):
+    """Collect per-seed error statistics using precomputed marginalised paths."""
     vals = []
-    for key in keys:
-        vals.append(one_seed_stats(key, delta, cfg))
+    for key, x_marg in zip(keys, marg_paths):
+        vals.append(one_seed_stats(key, delta, cfg, x_marg))
         if progress_bar is not None:
             progress_bar.update(1)
     return vals
@@ -354,21 +365,36 @@ def _resolve_delta_path(cfg):
 def _collect_ensemble_paths(path_keys, delta_path, cfg):
     """Return EM and marginalised path lists for ensemble diagnostics."""
     em_paths = []
-    marg_paths = []
-    for key_i in tqdm(path_keys, desc="Ensemble paths", leave=True):
-        # Keep your current approach here (coupled or uncoupled), whichever you decided.
+
+    for key_i in tqdm(path_keys, desc="Ensemble EM paths", leave=True):
         disc = prepare_coupled_discretization(key_i, delta_path, cfg.time.t_final)
         em_paths.append(
             euler_maruyama_from_increments(
                 drift, diffusion, disc.dw_coarse, delta_path, cfg.x0
             )
         )
-        marg_paths.append(
-            _marginalised_path(
-                jax.random.fold_in(key_i, 2), delta_path, cfg
-            )
-        )
-    return em_paths, marg_paths
+
+    marg_keys = jax.vmap(lambda key_i: jax.random.fold_in(key_i, 2))(path_keys)
+    marg_paths = _marginalised_paths_batch(marg_keys, delta_path, cfg)
+
+    return em_paths, list(marg_paths)
+
+
+def _marginalised_paths_batch(keys, delta, cfg):
+    """Simulate many independent Algorithm-4 Marginalised-GSF paths."""
+    num_steps = int(round(cfg.time.t_final / delta))
+    sde = SDESpec.from_args(drift, diffusion, jnp.asarray(cfg.x0), bm_factory=None)
+    marg_cfg = MarginalisedConfig(
+        delta=float(delta),
+        num_steps=num_steps,
+        sample_posterior_position=cfg.marginalised.sample_posterior_position,
+        use_ekf1=cfg.marginalised.use_ekf1,
+        variance_floor=cfg.marginalised.variance_floor,
+        prior_diffusion=cfg.marginalised.prior_diffusion,
+        return_uncertainty=False,
+    )
+    _, trajectories = solve_sde_marginalised_batch(keys, sde, marg_cfg)
+    return trajectories
 
 
 def _ensemble_summary_arrays(em_paths, marg_paths, t_final):

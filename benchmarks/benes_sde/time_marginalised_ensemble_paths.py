@@ -1,18 +1,25 @@
 """
 Time the Benes marginalised benchmark ensemble path construction.
 
-This script measures wall time for the same work as
-``_compute_ensemble_path_results`` in ``benes_marginalised_gsf_em``:
-for each seed, build coupled coarse EM increments and one marginalised
-trajectory, then aggregate means and quantiles.
+This script measures wall time for the ensemble-path section used by
+`_compute_ensemble_path_results` in `benes_marginalised_gsf_em`.
 
-It reports total time for the instrumented loop, per-component sums
-(``prepare_coupled_discretization``, coarse Euler--Maruyama path,
-inner ``solve_sde_marginalised`` with ``block_until_ready``), and mean
-time per path. With ``--verify-full-api``, also times one call to the
-uninstrumented ``_compute_ensemble_path_results`` (second full pass).
+The ensemble calculation builds many coarse Euler-Maruyama paths and many
+independent marginalised Algorithm-4 paths. Marginalised paths are generated
+with the batched marginalised path helper used by the benchmark implementation.
 
-Run from the repository root::
+It reports total time for the instrumented ensemble construction and component
+timings where available, including:
+- `prepare_coupled_discretization`,
+- coarse Euler-Maruyama path construction,
+- batched marginalised path construction,
+- mean/quantile summary construction.
+
+With `--verify-full-api`, it also times one call to the uninstrumented
+`_compute_ensemble_path_results` before the instrumented pass. This runs the
+ensemble calculation twice.
+
+Run from the repository root:
 
     python benchmarks/benes_sde/time_marginalised_ensemble_paths.py
     python benchmarks/benes_sde/time_marginalised_ensemble_paths.py --num-sample-paths 50
@@ -21,25 +28,24 @@ Run from the repository root::
 Functions
 ---------
 parse_args
-    CLI: seed, num_sample_paths override, optional full-API reference timing.
+    CLI: seed, number of ensemble paths, optional full-API reference timing.
 build_experiment_config
-    Build ``ExperimentConfig`` with optional overrides.
+    Build `ExperimentConfig` with optional overrides.
 split_ensemble_key
-    Match ``run_experiment`` key splitting for the ensemble ``key_paths``.
+    Match `run_experiment` key splitting for the ensemble path block.
 time_ensemble_path_construction
-    One instrumented pass mirroring ``_collect_ensemble_paths``.
+    One instrumented pass mirroring the ensemble path calculation.
 time_full_api_reference
-    Wall time for ``_compute_ensemble_path_results`` only.
+    Wall time for `_compute_ensemble_path_results`.
 print_report
-    Print totals, fractions, per-path marginalised min/mean/max.
+    Print total wall time and component timings.
 main
     Entry point.
 """
-
+# pylint: disable=wrong-import-position
 from __future__ import annotations
 
 import argparse
-import statistics
 import sys
 import time
 from dataclasses import replace
@@ -60,7 +66,7 @@ from benchmarks.benes_sde.benes_marginalised_gsf_em import (
     ExperimentConfig,
     _compute_ensemble_path_results,
     _ensemble_summary_arrays,
-    _marginalised_path,
+    _marginalised_paths_batch,
     _resolve_delta_path,
     drift,
     diffusion,
@@ -136,10 +142,8 @@ def time_ensemble_path_construction(
     path_keys = jax.random.split(key_paths_root, cfg.mc.num_sample_paths)
 
     em_paths: list = []
-    marg_paths: list = []
     t_disc_list: list[float] = []
     t_em_list: list[float] = []
-    t_marg_list: list[float] = []
 
     t_loop0 = time.perf_counter()
     for key_i in path_keys:
@@ -158,25 +162,24 @@ def time_ensemble_path_construction(
         )
         t2 = time.perf_counter()
 
-        marg_key = jax.random.fold_in(key_i, 2)
-        traj = _marginalised_path(marg_key, delta_path, cfg)
-        jax.block_until_ready(traj)
-        t3 = time.perf_counter()
-
-        marg_paths.append(traj)
         t_disc_list.append(t1 - t0)
         t_em_list.append(t2 - t1)
-        t_marg_list.append(t3 - t2)
+
+    marg_keys = jax.vmap(lambda key_i: jax.random.fold_in(key_i, 2))(path_keys)
+    t_marg0 = time.perf_counter()
+    marg_paths = _marginalised_paths_batch(marg_keys, delta_path, cfg)
+    jax.block_until_ready(marg_paths)
+    t_marg1 = time.perf_counter()
 
     t_loop1 = time.perf_counter()
-    loop_wall_s = t_loop1 - t_loop0
 
-    summary = _ensemble_summary_arrays(em_paths, marg_paths, cfg.time.t_final)
+    loop_wall_s = t_loop1 - t_loop0
+    summary = _ensemble_summary_arrays(em_paths, list(marg_paths), cfg.time.t_final)
 
     n = len(path_keys)
     sum_disc = float(sum(t_disc_list))
     sum_em = float(sum(t_em_list))
-    sum_marg = float(sum(t_marg_list))
+    sum_marg = float(t_marg1 - t_marg0)
 
     stats = {
         "n_paths": n,
@@ -190,8 +193,8 @@ def time_ensemble_path_construction(
         "mean_marg_s": sum_marg / max(n, 1),
         "t_disc_list": t_disc_list,
         "t_em_list": t_em_list,
-        "t_marg_list": t_marg_list,
     }
+
     return summary, stats
 
 
@@ -229,11 +232,23 @@ def print_report(
         sep="",
     )
     print("loop_wall_s (instrumented loop):".ljust(40), f"{wall:.6f}")
-    print("sum prepare_coupled_discretization:".ljust(40), f"{sd:.6f}", f"({pct(sd):.1f}% of wall)")
-    print("sum euler_maruyama (coarse EM):".ljust(40), f"{se:.6f}", f"({pct(se):.1f}% of wall)")
-    print("sum marginalised inner solve:".ljust(40), f"{sm:.6f}", f"({pct(sm):.1f}% of wall)")
+    print(
+        "sum prepare_coupled_discretization:".ljust(40),
+        f"{sd:.6f}",
+        f"({pct(sd):.1f}% of wall)",
+    )
+    print(
+        "sum euler_maruyama (coarse EM):".ljust(40),
+        f"{se:.6f}",
+        f"({pct(se):.1f}% of wall)",
+    )
+    print(
+        "batched marginalised solve:".ljust(40),
+        f"{sm:.6f}",
+        f"({pct(sm):.1f}% of wall)",
+    )
     print("sum of three parts:".ljust(40), f"{sd + se + sm:.6f}")
-    print("mean per path — disc / em / marg (s):".ljust(40), end=" ")
+    print("mean per path - disc / em / marg (s):".ljust(40), end=" ")
     print(
         f"{stats['mean_disc_s']:.6f}",
         "/",
@@ -241,18 +256,21 @@ def print_report(
         "/",
         f"{stats['mean_marg_s']:.6f}",
     )
+
     denom = sd + se + sm
     print(
         "marg fraction of (disc+em+marg):".ljust(40),
         f"{100.0 * sm / max(denom, 1e-12):.1f}%",
     )
 
-    print("\nPer-path marginalised times: min / mean / max (s)")
-    print(
-        min(stats["t_marg_list"]),
-        statistics.mean(stats["t_marg_list"]),
-        max(stats["t_marg_list"]),
-    )
+    print("\nBatched marginalised solve total / per path (s)")
+    print(f"{sm:.6f}", "/", f"{stats['mean_marg_s']:.6f}")
+
+    if full_api_s is not None:
+        print(
+            "\nReference _compute_ensemble_path_results (one call):".ljust(40),
+            f"{full_api_s:.6f}s",
+        )
 
     if full_api_s is not None:
         print(

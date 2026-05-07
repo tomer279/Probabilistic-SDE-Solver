@@ -40,8 +40,8 @@ meaning of `trajectory` and auxiliary fields depends on the method:
     `MGSFRunConfig.return_uncertainty=True`
 
 - method="marginalised"
-  - Runs `MarginalisedRunConfig.num_samples` independent trajectories and
-    aggregates them.
+  - Draws `MarginalisedRunConfig.num_samples` independent Algorithm-4 trajectories
+    using the batched marginalised path API.
   - `mean_trajectory`, `var_trajectory`: pointwise Monte Carlo mean/variance
   - `trajectory`: currently set to `mean_trajectory` for convenience
 
@@ -89,7 +89,7 @@ from prob_sde.filtering.sde.gaussian_sde_filter import (
 )
 from prob_sde.filtering.sde.marginalised import (
     MarginalisedConfig,
-    solve_sde_marginalised,
+    solve_sde_marginalised_batch
 )
 from prob_sde.filtering.sde.mixture_sde_filter import (
     EKFConfig,
@@ -537,9 +537,9 @@ def solve_marginalised(
 ) -> SDESolverResult:
     """Run the marginalised solver (Algorithm 4) with Monte Carlo aggregation.
 
-    This wrapper executes `run_cfg.num_samples` independent calls to
-    `solve_sde_marginalised`, stacks the sampled trajectories, and returns
-    pointwise Monte Carlo mean/variance trajectories in a unified result object.
+    This wrapper draws `run_cfg.num_samples` independent Algorithm-4 trajectories
+    via `solve_sde_marginalised_batch`, then returns pointwise Monte Carlo
+    mean/variance trajectories in a unified result object.
 
     Parameters
     ----------
@@ -569,6 +569,8 @@ def solve_marginalised(
 
     Notes
     -----
+    Independent trajectories are evaluated through the batched marginalised API
+    and then aggregated with pointwise mean/variance.
     The underlying `solve_sde_marginalised` implementation in this codebase is
     currently scalar-state oriented.
     """
@@ -585,17 +587,13 @@ def solve_marginalised(
         return_uncertainty=False,
     )
 
-    samples = []
     sample_keys = jax.random.split(key, cfg.num_samples)
-    for key_i in sample_keys:
-        _, traj_i = solve_sde_marginalised(
-            key=key_i,
-            sde=sde,
-            config=marg_cfg,
-        )
-        samples.append(traj_i)
+    _, all_samples = solve_sde_marginalised_batch(
+        keys=sample_keys,
+        sde=sde,
+        config=marg_cfg,
+    )
 
-    all_samples = jnp.asarray(samples)  # (num_samples, num_steps + 1)
     mean_traj = jnp.mean(all_samples, axis=0)
     var_traj = jnp.var(all_samples, axis=0)
 
