@@ -13,6 +13,8 @@ MarginalisedConfig
     Immutable configuration for Algorithm 4 runs.
 solve_sde_marginalised
     Run Algorithm 4 on a uniform grid and return one sampled trajectory.
+solve_sde_marginalised_batch
+    Run Algorithm 4 for a batch of independent PRNG keys and return stacked trajectories.
 """
 
 from dataclasses import dataclass
@@ -21,8 +23,9 @@ import jax
 import jax.numpy as jnp
 
 from prob_sde.core.prior_models import IWP2Prior
-from .position_sampling import PositionSamplingConfig, select_posterior_position
 from prob_sde.core.sde import SDESpec
+
+from .position_sampling import PositionSamplingConfig, select_posterior_position
 
 
 @dataclass(frozen=True)
@@ -402,3 +405,65 @@ def _posterior_at_step(
     t_k1 = t_k + ctx.cfg.delta
     h_pred, h_row = _measurement_terms(mean_pred, t_k, t_k1, ctx)
     return _ekf_update(mean_pred, cov_pred, h_pred, h_row)
+
+
+def solve_sde_marginalised_batch(
+        keys: jax.Array,
+        sde: SDESpec,
+        config: MarginalisedConfig,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Run Algorithm 4 independently for a batch of PRNG keys.
+
+    This is the batched counterpart to `solve_sde_marginalised`. It applies the
+    same marginalised Gaussian SDE filter independently to each PRNG key in
+    `keys` and stacks the resulting sampled trajectories.
+
+    The function is intended for Monte Carlo aggregation workloads where many
+    independent Algorithm-4 paths are needed on the same SDE, grid, and
+    configuration. It is semantically equivalent to calling
+    `solve_sde_marginalised(key_i, sde, config)` once per key and stacking the
+    trajectory outputs, but it can be substantially faster because the per-key
+    work is expressed as a single batched JAX program.
+
+    Parameters
+    ----------
+    keys : jax.Array
+        PRNG keys with leading shape `(num_samples, ...)`. Each key produces one
+        independent trajectory.
+    sde : SDESpec
+        Scalar SDE specification consumed by Algorithm 4.
+    config : MarginalisedConfig
+        Algorithm-4 configuration shared by every trajectory. The grid, EKF mode,
+        prior diffusion, and sampling policy are identical for all samples.
+
+    Returns
+    -------
+    ts : jnp.ndarray
+        Time grid of shape `(num_steps + 1,)`.
+    trajectories : jnp.ndarray
+        Sampled trajectories with shape `(num_samples, num_steps + 1)`, where
+        `trajectories[i]` corresponds to `keys[i]`.
+
+    Raises
+    ------
+    ValueError
+        If the configuration is invalid, or if unsupported options such as
+        batched uncertainty output are requested.
+
+    Notes
+    -----
+    This function does not average or compute variances. Callers such as
+    `solve_marginalised` are responsible for Monte Carlo aggregation.
+    """
+    config.validate()
+
+    if config.return_uncertainty:
+        raise ValueError("Batched marginalised solve does not return uncertainty yet.")
+
+    def solve_one(key_i):
+        _ts, traj = solve_sde_marginalised(key_i, sde, config)
+        return traj
+
+    ts = config.time_grid(t0=0.0)
+    trajectories = jax.vmap(solve_one)(keys)
+    return ts, trajectories

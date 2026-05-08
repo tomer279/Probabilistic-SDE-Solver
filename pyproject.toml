@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prob-sde"
-version = "0.1.0"
+version = "0.1.3"
 description = "Probabilistic SDE solvers via piecewise differentiable Brownian approximation and Gaussian ODE filters"
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,6 +28,7 @@ dependencies = [
     "jaxlib >= 0.4.0",
     "numpy >= 1.24",
     "matplotlib >= 3.5",
+    "tqdm >= 4.05"
 ]
 
 [project.optional-dependencies]

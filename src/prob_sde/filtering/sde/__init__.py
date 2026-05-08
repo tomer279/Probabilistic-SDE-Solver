@@ -10,7 +10,11 @@ Exports:
 """
 
 from .gaussian_sde_filter import GaussianSDEFilter, GaussianSDEFilterConfig, GaussianSDEFilterState
-from .marginalised import MarginalisedConfig, solve_sde_marginalised
+from .marginalised import (
+    MarginalisedConfig,
+    solve_sde_marginalised,
+    solve_sde_marginalised_batch
+)
 from .mixture_sde_filter import (
     MixtureSDEFilter,
     MixtureSDEFilterConfig,
@@ -32,6 +36,7 @@ __all__ = [
     "solve_sde_pathwise_mixture_with_coeffs",
     "MarginalisedConfig",
     "solve_sde_marginalised",
+    "solve_sde_marginalised_batch",
     "PositionSamplingConfig",
     "select_posterior_position",
     "to_carry",

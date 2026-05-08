@@ -108,7 +108,7 @@ class MixtureSDEFilterConfig:
     num_steps: int
     return_uncertainty: bool = False
     ekf: EKFConfig = field(default_factory=EKFConfig)
-    sample_posterior_position: bool = False
+    sample_posterior_position: bool = True
     variance_floor: float = 1e-12
     sampling_key: jax.Array | None = None
 

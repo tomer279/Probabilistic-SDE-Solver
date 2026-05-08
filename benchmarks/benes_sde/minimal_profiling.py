@@ -6,6 +6,15 @@ Profiles:
 - _compute_ensemble_path_results
 - _compute_mc_error_results
 - estimate_errors_for_delta at smallest delta
+
+Note
+----
+This script reports simple wall-clock timings but does not call
+`jax.block_until_ready` on JAX results. As a consequence, timings can be noisier
+or underestimate compute time depending on asynchronous dispatch behavior.
+For tighter JAX timing, prefer:
+- `benchmarks/benes_sde/section_timing_matrix.py` (section-level timings), and
+- `benchmarks/benes_sde/marginalised_scaling_bench.py` (inner vs facade scaling).
 """
 
 from __future__ import annotations

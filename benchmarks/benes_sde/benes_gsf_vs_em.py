@@ -226,6 +226,20 @@ def gsf_path_coupled_with_solver(
     result = solve_sde(root_key, sde, solver_cfg)
     return result.trajectory
 
+def _build_gsf_run_config(cfg):
+    """Build facade-level GSF run configuration from experiment settings."""
+    return GSFRunConfig(
+        prior_scale=1.0,
+        filter_config=GaussianSDEFilterConfig(
+            measurement_noise=cfg.solver.measurement_noise,
+            sample_posterior_position=cfg.solver.sample_posterior_position,
+            variance_floor=cfg.solver.variance_floor,
+            initial_cov_scale=cfg.solver.initial_cov_scale,
+            return_beta_coeffs=False,
+            ekf_mode="ekf1",
+        ),
+        return_uncertainty=False,
+    )
 
 def one_seed_errors(root_key, delta, cfg):
     """
@@ -325,21 +339,6 @@ def estimate_errors_for_delta(base_key, delta, cfg, progress_bar=None):
     gsf_local = float(np.mean(arr[:, 2]))
     gsf_global = float(np.mean(arr[:, 3]))
     return em_local, em_global, gsf_local, gsf_global
-
-def _build_gsf_run_config(cfg):
-    """Build facade-level GSF run configuration from experiment settings."""
-    return GSFRunConfig(
-        prior_scale=1.0,
-        filter_config=GaussianSDEFilterConfig(
-            measurement_noise=cfg.solver.measurement_noise,
-            sample_posterior_position=cfg.solver.sample_posterior_position,
-            variance_floor=cfg.solver.variance_floor,
-            initial_cov_scale=cfg.solver.initial_cov_scale,
-            return_beta_coeffs=False,
-            ekf_mode="ekf1",
-        ),
-        return_uncertainty=False,
-    )
 
 
 def run_experiment(cfg):

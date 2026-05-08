@@ -13,7 +13,7 @@ The method turns an SDE into a **sequence of random ODEs** by replacing Brownian
 
 - **Pathwise solver**: piecewise differentiable Brownian approximation + Gaussian ODE filter per step.
 - **Uncertainty bands**: Posterior mean and covariance from the filter at each step.
-- **Marginalised version**: Mean and variance by averaging over pathwise samples (optional exact transition densities via extended state).
+- **Marginalised version**: Monte Carlo sampling is evaluated with batched Algorithm-4 trajectories (`solve_sde_marginalised_batch`), and the facade returns pointwise mean/variance.
 - **Benchmarks**: strong/weak convergence and runtime comparisons (see `benchmarks/README.md`)
 
 ## Methods
@@ -25,6 +25,7 @@ This package provides three related probabilistic solvers for SDEs:
 - **Mixture Gaussian SDE Filter (MGSF, Algorithm 3)**: a pathwise solver that samples Brownian-approximation coefficients per interval, builds a local random ODE, and performs a Gaussian ODE-filter update each step. Produces one trajectory (mean or sampled posterior position) and can optionally return uncertainty.
 
 - **Marginalised Gaussian SDE Filter (Algorithm 4)**: marginalises over Brownian-approximation randomness using an augmented Gaussian state and Monte Carlo aggregation. In this codebase it is currently **scalar-state** oriented.
+In the unified facade (`method="marginalised"`), independent trajectories are generated via batched execution and aggregated into `mean_trajectory` / `var_trajectory`.
 
 You can select the backend via `SDESolverConfig.method` in the unified `solve_sde(...)` facade (`"gsf"`, `"mgsf"`, or `"marginalised"`).
 
@@ -77,7 +78,7 @@ traj = result.trajectory
 
 ## Project layout
 
-- **src/prob_sde/**: Core package  
+
 - `src/prob_sde/`: core package
   - `__init__.py`: public API (top-level exports)
   - `core/`
@@ -133,22 +134,53 @@ python examples/brownian_algorithm1_accuracy.py
 
 ## Benchmarks
 
-See `benchmarks/benes_sde/` for Benes SDE experiments comparing Euler–Maruyama (EM) against the probabilistic solvers:
+See `benchmarks/benes_sde/` for Benes SDE experiments comparing Euler–Maruyama (EM) against the probabilistic solvers.
+
+For profiling/timing harness entry points (performance baseline), see `benchmarks/README.md`.
 
 ```bash
 python benchmarks/benes_sde/benes_gsf_vs_em.py
 python benchmarks/benes_sde/benes_mgsf_gsf_em.py
 python benchmarks/benes_sde/benes_marginalised_gsf_em.py
+
+# Profiling / timing harnesses (performance baseline)
+python benchmarks/benes_sde/end_to_end_matrix.py
+python benchmarks/benes_sde/section_timing_matrix.py
+python benchmarks/benes_sde/marginalised_scaling_bench.py
+python benchmarks/benes_sde/profile_marginalised_inner_solve.py
+python benchmarks/benes_sde/time_marginalised_ensemble_paths.py
+
+# Minimal marginalised-only timing
 python benchmarks/benes_sde/minimal_profiling.py
 ```
+
+### Notes
+- The first run includes JAX compilation; prefer comparing warm-run timings.
+- The profiling scripts fix mc.seed for reproducibility by default.
+- Default Monte Carlo settings can take many minutes on CPU.
+
+### Performance note (marginalised solver)
+
+The marginalised solver now evaluates Monte Carlo trajectories with batched
+Algorithm-4 execution (`solve_sde_marginalised_batch`) instead of Python-level
+per-sample dispatch in the default facade path.
+
+In local benchmark runs (`N=100` in `marginalised_scaling_bench.py`), the
+marginalised facade runtime dropped from about `49.8s` (old explicit loop
+baseline) to about `0.43s` (batched facade), a speedup of roughly `117x`.
+
+In the Benes ensemble timing harness (`time_marginalised_ensemble_paths.py`,
+`num_sample_paths=500`), the batched marginalised component is now about `1.65s`
+(~`6.3%` of `~26.17s` total), so remaining runtime is dominated by coupled
+discretization and coarse EM path construction.
 
 ## Roadmap
 
 ### Near-term (next 1-2 releases)
 
-- **Performance baseline + profiling**
-  - Profile end-to-end runtime and per-method hotspots (GSF, MGSF, Marginalised).
-  - Prioritize optimization of marginalised workflows and Monte Carlo loops.
+- **Performance baseline + profiling** (partially done)
+  - Profile end-to-end runtime and per-method hotspots (GSF, MGSF, Marginalised) (done).
+  - Continue optimizing remaining coupled EM/GSF/reference Monte Carlo costs. (in progress).
 
 - **JAX-native execution path**
   - Migrate remaining non-JAX or partially NumPy/Python-loop code paths to JAX-native array operations.
