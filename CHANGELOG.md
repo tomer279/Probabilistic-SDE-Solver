@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-05-08
+
+### Added
+- Added weak-only terminal-time comparsion outputs in Benes marginalised benchamrk (`weak_em_g`, `weak_gsf_g`, `weak_marg_g`)
+
+### Changed
+- Updated benchmark presets to support faster local iteration (smoke) while preserving full-report defaults (publish), in `benchmarks\benes_sde\benes_marginalised_gsf_em.py`
+- Updated weak-error reporting to align with article-style terminal weak metric at time T, in `benchmarks\benes_sde\benes_marginalised_gsf_em.py`.
+- Updated benchmark and solver docstrings/comments to reflect terminal weak-g metrics.
+
+### Fixed
+- 
+
+### Notes
+- Profiling baseline established.
+- Remaining hotspot optimization deferred to 0.2.0 (JAX-native/vectorized coupled path work).
+
 ## [0.1.2] - 2026-05-07
 
 ### Added

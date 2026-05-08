@@ -1,39 +1,49 @@
 """
-Benes SDE benchmark: Marginalised-GSF vs GSF vs Euler-Maruyama (EM).
+Benes SDE benchmark: terminal weak-g comparison for EM, GSF, and Marginalised.
+
+This module runs a coupled Monte Carlo benchmark on the scalar Benes SDE and
+reports article-style weak error at terminal time T using
+    g(x) = x^2  (scalar case of g(X) = X X^T).
+
+For each step size delta, the benchmark computes paired paths (fine EM reference,
+coarse EM, GSF, and marginalised) and estimates:
+
+    eps_wg(delta) = || (1/N) * sum_k [ g(X^scheme_{T,k}) - g(X^ref_{T,k}) ] ||.
+
+Reported weak series
+--------------------
+- weak_em_g
+    Terminal weak-g error for coarse Euler-Maruyama vs fine EM reference.
+- weak_gsf_g
+    Terminal weak-g error for GSF vs fine EM reference.
+- weak_marg_g
+    Terminal weak-g error for marginalised solver vs fine EM reference.
 
 Exports
 -------
 TimeConfig
-    Time-discretization settings for path generation and convergence tests.
+    Time-grid settings for path panel and convergence sweeps.
 MonteCarloConfig
-    Monte Carlo sampling configuration for error statistics.
+    Monte Carlo sampling settings.
 GSFSolverConfig
-    Algorithm-2 Gaussian SDE Filter numerical parameters.
+    Algorithm-2 Gaussian SDE Filter settings.
 MarginalisedSolverConfig
-    Algorithm-4 Marginalised Gaussian SDE Filter numerical parameters.
+    Algorithm-4 marginalised solver settings.
 ExperimentConfig
-    Top-level configuration for the benchmark.
+    Top-level benchmark configuration.
 run_experiment
-    Compute path samples and error curves over step sizes.
+    Compute ensemble summaries and weak-g convergence series.
 plot_results
-    Plot trajectories and log-log convergence curves.
+    Plot ensemble trajectories and weak-g log-log curves.
+print_weak_g_error_comparison_table
+    Print terminal weak-g table for EM/GSF/Marginalised.
 main
-    Run the full benchmark and save figures.
+    CLI entry point.
 
-Notes
------
-- EM/GSF errors are reported as strong local/global errors using coupled noise.
-- Marginalised errors are reported as weak local/global errors:
-  absolute difference of sample means versus fine EM reference.
-  
-Future Work
------------
-- Performance: this benchmark currently has runtime bottlenecks (especially Monte
-  Carlo loops and repeated per-seed path construction). Refactor and optimize this
-  module in a follow-up pass.
-- Brownian backend: migrate Brownian path/coefficient construction to JAX-native
-  operations to improve compatibility with JAX transformations (e.g., vmap/jit)
-  and reduce host/device conversion overhead.
+Presets
+-------
+- publish: full benchmark defaults.
+- smoke: reduced settings for faster local iteration.
 """
 # pylint: disable=wrong-import-position
 from pathlib import Path
@@ -43,7 +53,9 @@ ROOT_STR = str(_REPO_ROOT)
 if ROOT_STR not in sys.path:
     sys.path.insert(0, ROOT_STR)
 
-from dataclasses import dataclass
+
+import argparse
+from dataclasses import dataclass, replace
 from typing import Optional
 
 try:
@@ -66,7 +78,6 @@ from benchmarks.benchmark_utils import (
     plot_fitted_error_series,
     prepare_coupled_discretization,
     resolve_mc_run_seed,
-    strong_errors_from_paths,
 )
 
 from prob_sde import (
@@ -93,7 +104,7 @@ class TimeConfig:
     """Time-discretization settings for simulation and convergence tests."""
 
     t_final: float = 1.0
-    deltas: tuple[float, ...] = (2.0**-1, 2.0**-2, 2.0**-3, 2.0**-4)
+    deltas: tuple[float, ...] = (2.0**-1, 2.0**-2, 2.0**-3, 2.0**-4, 2.0 ** -5)
     delta_for_path: Optional[float] = 0.01
 
 
@@ -110,7 +121,7 @@ class GSFSolverConfig:
     """Algorithm-2 GSF settings."""
 
     measurement_noise: float = 1e-6
-    sample_posterior_position: bool = False
+    sample_posterior_position: bool = True
     variance_floor: float = 1e-12
     initial_cov_scale: float = 1e-8
 
@@ -120,7 +131,7 @@ class MarginalisedSolverConfig:
     """Algorithm-4 Marginalised-GSF settings."""
 
     sample_posterior_position: bool = True
-    use_ekf1: bool = True
+    use_ekf1: bool = False
     variance_floor: float = 1e-12
     prior_diffusion: float = 1.0
 
@@ -136,7 +147,7 @@ class ExperimentConfig:
     marginalised: MarginalisedSolverConfig = MarginalisedSolverConfig()
 
 
-def drift(x, _t):
+def drift(x, t):
     """Benes drift."""
     return jnp.tanh(x)
 
@@ -163,15 +174,6 @@ def _marginalised_path(key, delta, cfg):
     return traj
 
 
-def _weak_ingredients_from_paths(x_ref, x_marg, block_size):
-    """Return local/global values used for weak mean error aggregation."""
-    ref_local = x_ref[block_size]
-    ref_global = x_ref[-1]
-    marg_local = x_marg[1]
-    marg_global = x_marg[-1]
-    return ref_local, ref_global, marg_local, marg_global
-
-
 def g_weak_observable(x):
     """Article weak functional g(X) = X X^T. Scalar SDE -> g(x) = x^2."""
     x = jnp.asarray(x)
@@ -196,22 +198,18 @@ def weak_error_g_hat(diff_per_seed):
 
 
 def one_seed_stats(root_key, delta, cfg, x_marg):
-    """Per-seed strong errors + weak-g errors with precomputed marginalised path."""
+    """Per-seed terminal weak-g differences for EM, GSF, and Marginalised."""
     disc, x_ref, x_em, x_gsf = _simulate_coupled_non_marginalised_paths(
         root_key,
         delta,
         cfg,
     )
 
-    strong = strong_errors_from_paths(x_ref, x_em, x_gsf, disc.block_size)
-    ref_local = x_ref[disc.block_size]
-    ref_global = x_ref[-1]
+    weak_em = _weak_diffs_against_ref_terminal(x_em, x_ref)
+    weak_gsf = _weak_diffs_against_ref_terminal(x_gsf, x_ref)
+    weak_marg = _weak_diffs_against_ref_terminal(x_marg, x_ref)
 
-    weak_em = _weak_diffs_against_ref_local_global(x_em, ref_local, ref_global)
-    weak_gsf = _weak_diffs_against_ref_local_global(x_gsf, ref_local, ref_global)
-    weak_marg = _weak_diffs_against_ref_local_global(x_marg, ref_local, ref_global)
-
-    return (*strong, *weak_em, *weak_gsf, *weak_marg)
+    return (weak_em, weak_gsf, weak_marg)
 
 
 def _simulate_coupled_non_marginalised_paths(root_key, delta, cfg):
@@ -233,16 +231,13 @@ def _simulate_coupled_non_marginalised_paths(root_key, delta, cfg):
     return disc, x_ref, x_em, x_gsf
 
 
-def _weak_diffs_against_ref_local_global(x_scheme, ref_local, ref_global):
-    """Return weak-observable differences (local, global) for one scheme."""
-    return (
-        float(g_weak_observable(x_scheme[1]) - g_weak_observable(ref_local)),
-        float(g_weak_observable(x_scheme[-1]) - g_weak_observable(ref_global)),
-    )
+def _weak_diffs_against_ref_terminal(x_scheme, x_ref):
+    """Return terminal-time weak-observable difference for one scheme."""
+    return float(g_weak_observable(x_scheme[-1]) - g_weak_observable(x_ref[-1]))
 
 
 def estimate_errors_for_delta(base_key, delta, cfg, progress_bar=None):
-    """Strong errors + article weak-g errors for one delta."""
+    """Compute article weak-g error estimates (EM/GSF/Marginalised) for one delta."""
     keys = jax.random.split(base_key, cfg.mc.num_sample_paths)
 
     marg_keys = jax.vmap(lambda key_i: jax.random.fold_in(key_i, 2))(keys)
@@ -252,18 +247,13 @@ def estimate_errors_for_delta(base_key, delta, cfg, progress_bar=None):
     vals = _collect_seed_stats(keys, marg_paths, delta, cfg, progress_bar)
 
     arr = np.asarray(vals, dtype=float)
-
-    strong_cols = (0, 1, 2, 3)
-    weak_cols = (4, 5, 6, 7, 8, 9)
-
-    strong_vals = _mean_columns(arr, strong_cols)
-    weak_vals = _weak_g_columns(arr, weak_cols)
-    return (*strong_vals, *weak_vals)
-
-
-def _mean_columns(arr, columns):
-    """Return tuple of column means from a 2D numpy array."""
-    return tuple(float(np.mean(arr[:, col])) for col in columns)
+    cols = (0, 1, 2)
+    (weak_em_g, weak_gsf_g, weak_marg_g) = _weak_g_columns(arr, cols)
+    return {
+        'weak_em_g': weak_em_g,
+        'weak_gsf_g': weak_gsf_g,
+        'weak_marg_g': weak_marg_g
+    }
 
 
 def _weak_g_columns(arr, columns):
@@ -426,18 +416,11 @@ def _mean_and_quantiles(paths_arr, q_low, q_high):
 
 
 def _compute_mc_error_results(key_mc, cfg):
-    """Strong error curves + article weak-g error curves over deltas."""
+    """Compute weak-g error curves over deltas for EM, GSF, and Marginalised."""
     series = {
-        "em_local": [],
-        "em_global": [],
-        "gsf_local": [],
-        "gsf_global": [],
-        "weak_em_local_g": [],
-        "weak_em_global_g": [],
-        "weak_gsf_local_g": [],
-        "weak_gsf_global_g": [],
-        "weak_marg_local_g": [],
-        "weak_marg_global_g": [],
+        "weak_em_g": [],
+        "weak_gsf_g": [],
+        "weak_marg_g": []
     }
 
     total_mc = len(cfg.time.deltas) * cfg.mc.num_sample_paths
@@ -446,13 +429,14 @@ def _compute_mc_error_results(key_mc, cfg):
 
     for idx, delta in enumerate(delta_iter):
         key_i = jax.random.fold_in(key_mc, idx)
-        estimates = estimate_errors_for_delta(key_i, delta, cfg, progress_bar=mc_bar)
-        for name, value in zip(series.keys(), estimates):
+        estimates = estimate_errors_for_delta(
+            key_i, delta, cfg, progress_bar=mc_bar)
+        for name, value in estimates.items():
             series[name].append(value)
         delta_iter.set_postfix(
-            em_g=round(estimates[1], 5),
-            gsf_g=round(estimates[3], 5),
-            marg_wg=round(estimates[9], 5),
+            em_wg=round(estimates['weak_em_g'], 5),
+            gsf_wg=round(estimates['weak_gsf_g'], 5),
+            marg_wg=round(estimates['weak_marg_g'], 5),
         )
 
     mc_bar.close()
@@ -508,7 +492,7 @@ def _plot_ensemble_panel(ax, results):
 
 
 def _plot_error_panel(ax, results):
-    """Plot log-log errors and fitted rates."""
+    """Plot log-log terminal weak-g errors and fitted convergence rates."""
     deltas = np.asarray(results["deltas"])
     plot_error_data_series(
         ax, deltas, results, EM_GSF_MARG_WEAK_ERROR_SERIES_SPECS)
@@ -538,33 +522,26 @@ def _plot_error_panel(ax, results):
 
     ax.set_xlabel("delta")
     ax.set_ylabel("MC mean error")
-    ax.set_title("Strong (EM/GSF) and weak (Marginalised) errors")
+    ax.set_title("Terminal weak-g errors (EM, GSF, Marginalised)")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(fontsize=9)
 
 
 def print_weak_g_error_comparison_table(results):
-    """Print EM vs GSF vs Marginalised using article weak functional g(X)=X X^T."""
+    """Print terminal weak-g error comparison for EM, GSF, and Marginalised."""
     deltas = np.asarray(results["deltas"], dtype=float)
-    w_em_l = np.asarray(results["weak_em_local_g"], dtype=float)
-    w_gsf_l = np.asarray(results["weak_gsf_local_g"], dtype=float)
-    w_m_l = np.asarray(results["weak_marg_local_g"], dtype=float)
-    w_em_g = np.asarray(results["weak_em_global_g"], dtype=float)
-    w_gsf_g = np.asarray(results["weak_gsf_global_g"], dtype=float)
-    w_m_g = np.asarray(results["weak_marg_global_g"], dtype=float)
+    w_em = np.asarray(results["weak_em_g"], dtype=float)
+    w_gsf = np.asarray(results["weak_gsf_g"], dtype=float)
+    w_marg = np.asarray(results["weak_marg_g"], dtype=float)
 
     headers = (
         "delta",
-        "W_EM loc",
-        "W_GSF loc",
-        "W_Marg loc",
-        "Best loc",
-        "W_EM glob",
-        "W_GSF glob",
-        "W_Marg glob",
-        "Best glob",
+        "W_EM",
+        "W_GSF",
+        "W_Marg",
+        "Best",
     )
-    widths = (10, 12, 12, 12, 10, 12, 12, 13, 11)
+    widths = (10, 12, 12, 12, 10)
 
     def fmt_num(x):
         return f"{x:.6e}"
@@ -588,7 +565,7 @@ def print_weak_g_error_comparison_table(results):
 
     separator = "-+-".join("-" * width for width in widths)
 
-    print("\nWeak error g(X)=X X^T vs fine EM (article estimator; scalar g(x)=x^2)")
+    print("\nWeak error g(X)=X X^T vs fine EM at terminal time T")
     print(row(headers))
     print(separator)
 
@@ -597,26 +574,111 @@ def print_weak_g_error_comparison_table(results):
             row(
                 (
                     f"{deltas[i]:.6f}",
-                    fmt_num(w_em_l[i]),
-                    fmt_num(w_gsf_l[i]),
-                    fmt_num(w_m_l[i]),
-                    winner_name(w_em_l[i], w_gsf_l[i], w_m_l[i]),
-                    fmt_num(w_em_g[i]),
-                    fmt_num(w_gsf_g[i]),
-                    fmt_num(w_m_g[i]),
-                    winner_name(w_em_g[i], w_gsf_g[i], w_m_g[i]),
+                    fmt_num(w_em[i]),
+                    fmt_num(w_gsf[i]),
+                    fmt_num(w_marg[i]),
+                    winner_name(w_em[i], w_gsf[i], w_marg[i]),
                 )
             )
         )
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for benchmark presets."""
+    parser = argparse.ArgumentParser(
+        description="Run Benes EM/GSF/Marginalised benchmark."
+    )
+    parser.add_argument(
+        "--preset",
+        choices=("publish", "smoke"),
+        default="publish",
+        help="publish=full benchmark defaults, smoke=faster local iteration.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional Monte Carlo seed override.",
+    )
+    parser.add_argument(
+        "--num-sample-paths",
+        type=int,
+        default=None,
+        help="Optional override for MonteCarloConfig.num_sample_paths.",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Prompt for preset/overrides (useful for IDE runs).",
+    )
+    args, _unknown = parser.parse_known_args()
+    return args
+
+
+def prompt_runtime_options(args: argparse.Namespace) -> argparse.Namespace:
+    """Interactively override runtime options for IDE-friendly runs."""
+    print("\nInteractive benchmark options (press Enter to keep current value).")
+
+    preset_in = input(f"Preset [publish/smoke] (current: {args.preset}): ").strip().lower()
+    if preset_in in ("publish", "smoke"):
+        args.preset = preset_in
+
+    seed_in = input(f"Seed (current: {args.seed}): ").strip()
+    if seed_in != "":
+        args.seed = int(seed_in)
+
+    n_in = input(
+        "num_sample_paths override "
+        f"(current: {args.num_sample_paths}, blank=use preset/default): "
+    ).strip()
+    if n_in != "":
+        args.num_sample_paths = int(n_in)
+
+    return args
+
+
+def build_experiment_config(args: argparse.Namespace) -> ExperimentConfig:
+    """Build ExperimentConfig from preset plus optional overrides."""
+    cfg = ExperimentConfig()  # publish defaults stay unchanged
+
+    if args.preset == "smoke":
+        cfg = replace(
+            cfg,
+            time=replace(
+                cfg.time,
+                deltas=(2.0**-1, 2.0**-2),   # fewer deltas
+                delta_for_path=2.0**-2,      # coarser path panel
+            ),
+            mc=replace(
+                cfg.mc,
+                num_sample_paths=40,         # fast local iteration
+            ),
+        )
+
+    mc_cfg = cfg.mc
+    if args.seed is not None:
+        mc_cfg = replace(mc_cfg, seed=int(args.seed))
+    if args.num_sample_paths is not None:
+        mc_cfg = replace(mc_cfg, num_sample_paths=int(args.num_sample_paths))
+    if mc_cfg is not cfg.mc:
+        cfg = replace(cfg, mc=mc_cfg)
+
+    return cfg
+
+
 def main():
     """Run Benes SDE benchmark and plots for EM, GSF, and Marginalised."""
-    cfg = ExperimentConfig()
+    args = parse_args()
+    if args.interactive:
+        args = prompt_runtime_options(args)
+
+    cfg = build_experiment_config(args)
     results = run_experiment(cfg)
     print_weak_g_error_comparison_table(results)
     plot_results(results)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        sys.argv.append("--interactive")
     main()

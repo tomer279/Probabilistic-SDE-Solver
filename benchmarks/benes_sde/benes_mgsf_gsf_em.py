@@ -91,7 +91,7 @@ class TimeConfig:
     """
 
     t_final: float = 1.0
-    deltas = (2.0**-1, 2.0**-2, 2.0**-3, 2.0**-4)
+    deltas = (2.0**-1, 2.0**-2, 2.0**-3, 2.0**-4, 2.0**-5)
     delta_for_path: Optional[float] = 0.01
 
 
@@ -130,9 +130,10 @@ class SolverConfig:
     """
 
     measurement_noise: float = 0.0
-    sample_posterior_position: bool = False
+    sample_posterior_position: bool = True
     variance_floor: float = 1e-12
     initial_cov_scale: float = 1e-8
+    posterior_ekf_mode: str = "ekf0"
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ class MixtureConfig:
     """
 
     num_paths_per_seed: int = 500
+    sample_posterior_position: bool = False
     use_ekf1_tk_initialization: bool = False
     posterior_ekf_mode: str = "ekf0"
 
@@ -178,9 +180,9 @@ class ExperimentConfig:
     solver: SolverConfig = SolverConfig()
     mixture: MixtureConfig = MixtureConfig()
 
-def drift(x, _t):
+def drift(x, t):
     """Benes drift: tanh(x)."""
-    return jnp.tanh(x)
+    return jnp.array(x)
 
 def diffusion(_x, _t):
     """Benes diffusion: constant one."""
@@ -210,14 +212,14 @@ def _build_gsf_run_config(cfg, coeffs_list=None):
             variance_floor=cfg.solver.variance_floor,
             initial_cov_scale=cfg.solver.initial_cov_scale,
             return_beta_coeffs=False,
-            ekf_mode="ekf1",
+            ekf_mode=cfg.solver.posterior_ekf_mode,
         ),
         coeffs_list=coeffs_list,
         return_uncertainty=False,
     )
 
 
-def _build_mixture_solver_inputs(delta, cfg):
+def _build_mixture_solver_inputs(delta, cfg, sampling_key=None):
     """Build Algorithm-3 Mixture-GSF inputs for one step size."""
     sde = SDESpec.from_args(
         drift,
@@ -234,6 +236,8 @@ def _build_mixture_solver_inputs(delta, cfg):
             use_ekf1_tk_initialization=cfg.mixture.use_ekf1_tk_initialization,
             posterior_ekf_mode=cfg.mixture.posterior_ekf_mode,
         ),
+        sample_posterior_position=cfg.mixture.sample_posterior_position,
+        sampling_key=sampling_key
     )
     return sde, prior, solver_cfg
 
@@ -302,9 +306,9 @@ def _mixture_errors_from_paths(x_ref, x_mixture_paths, block_size):
 
 # Coupled MGSF still uses the low-level API;
 # sde_solver.solve_mgsf does not support coeffs_list yet.
-def mgsf_path_coupled_with_coeffs(delta, cfg, coeffs_list):
+def mgsf_path_coupled_with_coeffs(delta, cfg, coeffs_list, sampling_key=None):
     """Simulate one Mixture-GSF trajectory using supplied interval coeffs."""
-    sde, prior, solver_cfg = _build_mixture_solver_inputs(delta, cfg)
+    sde, prior, solver_cfg = _build_mixture_solver_inputs(delta, cfg, sampling_key)
     _, traj = solve_sde_pathwise_mixture_with_coeffs(
         sde=sde,
         prior=prior,
@@ -322,7 +326,9 @@ def one_seed_errors(root_key, delta, cfg):
         x_ref, x_em, x_gsf, disc.block_size
     )
 
-    x_mgsf = mgsf_path_coupled_with_coeffs(delta, cfg, disc.coeffs_list)
+    key_mgsf = jax.random.fold_in(root_key, 7)
+    x_mgsf = mgsf_path_coupled_with_coeffs(
+        delta, cfg, disc.coeffs_list, sampling_key=key_mgsf)
     mgsf_local = jnp.abs(x_mgsf[1] - x_ref[disc.block_size])
     mgsf_global = jnp.abs(x_mgsf[-1] - x_ref[-1])
 
@@ -430,15 +436,17 @@ def _compute_path_results(key_paths, cfg):
 
     key_gsf = jax.random.fold_in(key_paths, 1)
     num_steps_path = len(coeffs_list)
+    key_mgsf_path = jax.random.fold_in(key_paths, 7)
     path_gsf = gsf_path_facade_coupled(
         key_gsf,
         cfg,
         delta_path,
         num_steps_path,
-        coeffs_list,
+        coeffs_list
     )
 
-    path_mgsf = mgsf_path_coupled_with_coeffs(delta_path, cfg, coeffs_list)
+    path_mgsf = mgsf_path_coupled_with_coeffs(
+        delta_path, cfg, coeffs_list, sampling_key=key_mgsf_path)
 
     return {
         "ts_path": np.asarray(jnp.linspace(0.0, cfg.time.t_final, len(dw_coarse) + 1)),

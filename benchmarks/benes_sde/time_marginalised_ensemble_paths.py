@@ -6,7 +6,8 @@ This script measures wall time for the ensemble-path section used by
 
 The ensemble calculation builds many coarse Euler-Maruyama paths and many
 independent marginalised Algorithm-4 paths. Marginalised paths are generated
-with the batched marginalised path helper used by the benchmark implementation.
+with `_marginalised_paths_batch`, which delegates to batched marginalised
+trajectory sampling.
 
 It reports total time for the instrumented ensemble construction and component
 timings where available, including:

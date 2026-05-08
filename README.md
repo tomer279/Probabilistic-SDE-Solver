@@ -178,9 +178,9 @@ discretization and coarse EM path construction.
 
 ### Near-term (next 1-2 releases)
 
-- **Performance baseline + profiling**
-  - Profile end-to-end runtime and per-method hotspots (GSF, MGSF, Marginalised).
-  - Continue optimizing remaining coupled EM/GSF/reference Monte Carlo costs.
+- **Performance baseline + profiling** (partially done)
+  - Profile end-to-end runtime and per-method hotspots (GSF, MGSF, Marginalised) (done).
+  - Continue optimizing remaining coupled EM/GSF/reference Monte Carlo costs. (in progress).
 
 - **JAX-native execution path**
   - Migrate remaining non-JAX or partially NumPy/Python-loop code paths to JAX-native array operations.

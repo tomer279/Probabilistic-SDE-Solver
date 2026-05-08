@@ -145,26 +145,9 @@ EM_GSF_MGSF_ERROR_SERIES_SPECS: tuple[ErrorSeriesSpec, ...] = (
 )
 
 EM_GSF_MARG_WEAK_ERROR_SERIES_SPECS: tuple[ErrorSeriesSpec, ...] = (
-    ErrorSeriesSpec("em_local", "EM strong local", "EM local (strong)", "o-", "C0", "-"),
-    ErrorSeriesSpec("em_global", "EM strong global", "EM global (strong)", "s-", "C1", "-"),
-    ErrorSeriesSpec("gsf_local", "GSF strong local", "GSF local (strong)", "o--", "C2", "--"),
-    ErrorSeriesSpec("gsf_global", "GSF strong global", "GSF global (strong)", "s--", "C3", "--"),
-    ErrorSeriesSpec(
-        "weak_marg_local_g",
-        "Marg weak g (local)",
-        "Marg weak g (local)",
-        "^-.",
-        "C4",
-        "-.",
-    ),
-    ErrorSeriesSpec(
-        "weak_marg_global_g",
-        "Marg weak g (global)",
-        "Marg weak g (global)",
-        "v-.",
-        "C5",
-        "-.",
-    ),
+    ErrorSeriesSpec("weak_em_g", "EM weak g", "EM weak g", "o-", "C0", "-"),
+    ErrorSeriesSpec("weak_gsf_g", "GSF weak g", "GSF weak g", "s--", "C1", "--"),
+    ErrorSeriesSpec("weak_marg_g", "Marg weak g", "Marg weak g", "^-.", "C2", "-."),
 )
 
 

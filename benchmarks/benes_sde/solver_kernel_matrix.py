@@ -1,12 +1,14 @@
 """
 Solver kernel timing matrix for `solve_sde` methods (GSF / MGSF / marginalised).
 
-This script isolates solver call cost on a fixed grid, outside the benchmark-level
+This script isolates solver call cost on a fixed grid, outside benchmark-level
 Monte Carlo loops. It times:
 
 - `solve_sde(..., method="gsf")`
 - `solve_sde(..., method="mgsf")`
-- `solve_sde(..., method="marginalised")` (facade aggregation across `num_samples`)
+- `solve_sde(..., method="marginalised")`
+  (facade-level Monte Carlo aggregation over `num_samples`, with batched
+  marginalised trajectory sampling in the underlying implementation)
 
 Timing notes
 ------------
@@ -80,7 +82,7 @@ def main() -> None:
         "mgsf",
         lambda: solve_sde(key, sde_mgsf, cfg_mgsf).trajectory
     )
-    # Marginalised facade (MC aggregation loop in solve_marginalised)
+    # Marginalised facade (batched marginalised sampling + aggregation in solve_marginalised)
     cfg_m = SDESolverConfig(
         method="marginalised",
         grid=grid,
