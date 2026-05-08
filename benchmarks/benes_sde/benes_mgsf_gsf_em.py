@@ -182,7 +182,7 @@ class ExperimentConfig:
 
 def drift(x, t):
     """Benes drift: tanh(x)."""
-    return jnp.array(x)
+    return jnp.tanh(x)
 
 def diffusion(_x, _t):
     """Benes diffusion: constant one."""
