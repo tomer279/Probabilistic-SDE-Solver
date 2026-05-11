@@ -69,9 +69,9 @@ from benchmarks.benes_sde.benes_marginalised_gsf_em import (
     _ensemble_summary_arrays,
     _marginalised_paths_batch,
     _resolve_delta_path,
-    drift,
-    diffusion,
 )
+
+from benchmarks.benes_sde.benes_dynamics import drift,diffusion
 
 
 def parse_args() -> argparse.Namespace:

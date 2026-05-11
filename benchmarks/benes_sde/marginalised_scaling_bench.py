@@ -48,13 +48,7 @@ from prob_sde.solvers.sde_solver import (
     solve_sde,
 )
 
-
-def benes_drift(x, _t):
-    return jnp.tanh(x)
-
-
-def benes_diffusion(_x, _t):
-    return jnp.array(1.0)
+from benchmarks.benes_sde.benes_dynamics import drift, diffusion
 
 
 def time_call(name, fn, warmup=2, repeats=5):
@@ -83,7 +77,7 @@ def main():
     grid = TimeGridConfig(delta=float(delta), num_steps=num_steps, t0=0.0)
 
     # SDE without bm_factory — marginalised ignores it internally
-    sde = SDESpec.from_args(benes_drift, benes_diffusion, jnp.array(0.0), bm_factory=None)
+    sde = SDESpec.from_args(drift, diffusion, jnp.array(0.0), bm_factory=None)
 
     marg_cfg = MarginalisedConfig(
         delta=float(delta),

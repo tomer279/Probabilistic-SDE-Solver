@@ -13,8 +13,6 @@ Run from the repository root (with the package installed, e.g. ``pip install -e 
 
 Functions
 ---------
-benes_drift, benes_diffusion
-    Scalar Benes SDE fields for the demo problem.
 build_sde_spec
     Construct ``SDESpec`` for the timed runs.
 time_single_marginalised_solve
@@ -43,23 +41,14 @@ if str(_REPO_ROOT) not in sys.path:
 
 from prob_sde.core.sde import SDESpec
 from prob_sde.filtering.sde.marginalised import MarginalisedConfig, solve_sde_marginalised
-
-
-def benes_drift(x: jnp.ndarray, _t: float) -> jnp.ndarray:
-    """Benes drift tanh(x)."""
-    return jnp.tanh(x)
-
-
-def benes_diffusion(_x: jnp.ndarray, _t: float) -> jnp.ndarray:
-    """Constant diffusion equal to one."""
-    return jnp.array(1.0)
+from benchmarks.benes_sde.benes_dynamics import drift, diffusion
 
 
 def build_sde_spec(x0: float) -> SDESpec:
     """Return ``SDESpec`` for the timed solves (no Brownian factory required)."""
     return SDESpec.from_args(
-        benes_drift,
-        benes_diffusion,
+        drift,
+        diffusion,
         jnp.asarray(x0),
         bm_factory=None,
     )

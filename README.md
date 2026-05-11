@@ -180,11 +180,11 @@ discretization and coarse EM path construction.
 
 - **Performance baseline + profiling** (partially done)
   - Profile end-to-end runtime and per-method hotspots (GSF, MGSF, Marginalised) (done).
-  - Continue optimizing remaining coupled EM/GSF/reference Monte Carlo costs. (in progress).
+  - Continue optimizing coupled EM, GSF, and reference Monte Carlo costs (in progress; 0.1.4 improves Benes GSF-vs-EM MC vectorization and coeff batching; full pipeline still bottlenecked elsewhere per benchmarks).
 
-- **JAX-native execution path**
-  - Migrate remaining non-JAX or partially NumPy/Python-loop code paths to JAX-native array operations.
-  - Improve compatibility with `jit` and `vmap` for batched experiments.
+- **JAX-native execution path** (in progress)
+  - Migrate remaining non-JAX, NumPy, or Python-loop code paths in core solvers and coupled paths to JAX-native operations.
+  - Broaden jit / vmap compatibility for batched experiments (0.1.4: stronger coverage in Benes benchmarks and stacked Brownian coeffs; library-wide coverage still incomplete).
 
 - **Documentation and examples**
   - Expand method-specific examples for `"gsf"`, `"mgsf"`, and `"marginalised"` via `solve_sde`.

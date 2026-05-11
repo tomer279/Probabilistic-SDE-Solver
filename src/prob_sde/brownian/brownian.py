@@ -294,10 +294,11 @@ def parabolic_coeffs_from_fine_window(
     """
     interval_times = times[left_idx : right_idx + 1]
     interval_values = w[left_idx : right_idx + 1]
-    left_value = float(w[left_idx])
-    right_value = float(w[right_idx])
-    area = _interval_bridge_area(interval_times, interval_values, left_value, right_value)
-    i_delta = jnp.asarray(-(np.sqrt(6.0) / delta_coarse) * area)
+    left_value = w[left_idx]
+    right_value = w[right_idx]
+    area = _interval_bridge_area(
+        interval_times, interval_values, left_value, right_value)
+    i_delta = jnp.asarray(-(jnp.sqrt(6.0) / delta_coarse) * area)
     w0 = jnp.array(0.0)
     w_delta = jnp.asarray(right_value - left_value)
     return (w0, w_delta, i_delta)
@@ -336,7 +337,7 @@ def _interval_bridge_area(
     u = (interval_times - interval_times[0]) / delta
     linear_part = left_value + (right_value - left_value) * u
     bridge_part = interval_values - linear_part
-    return np.trapezoid(bridge_part, interval_times)
+    return jnp.trapezoid(bridge_part, interval_times)
 
 def brownian_and_parabolic_coeffs(
         key,
@@ -385,7 +386,7 @@ def brownian_and_parabolic_coeffs(
     """
     n_ref, times, w, dw_fine = _sample_fine_brownian_path(key, t_final, delta_fine)
     num_steps, block_size = _coarse_grid_layout(n_ref, t_final, delta_coarse)
-    coeffs_list = _parabolic_coeffs_list(
+    coeffs = _parabolic_coeffs_list(
         times, w, num_steps, block_size, delta_coarse)
     dw_coarse = _coarse_increments_from_fine(dw_fine, num_steps, block_size)
     _, eval_parabolic = piecewise_parabolic_brownian()
@@ -396,7 +397,7 @@ def brownian_and_parabolic_coeffs(
         "w": w,
         "dw_fine": dw_fine,
         "dw_coarse": dw_coarse,
-        "coeffs_list": coeffs_list,
+        "coeffs": coeffs,
         "eval_parabolic": eval_parabolic,
         "block_size": block_size,
     }
@@ -410,7 +411,7 @@ def brownian_and_parabolic_coeffs(
         result["w"],
         result["dw_fine"],
         result["dw_coarse"],
-        result["coeffs_list"],
+        result["coeffs"],
         result["eval_parabolic"],
         result["block_size"],
     )
@@ -422,9 +423,10 @@ def _sample_fine_brownian_path(key, t_final: float, delta_fine: float):
     if not np.isclose(n_ref * delta_fine, t_final):
         raise ValueError("t_final must be an integer multiple of delta_fine.")
     dw_fine = random.normal(key, (n_ref,)) * jnp.sqrt(delta_fine)
-    dw_np = np.asarray(dw_fine)
-    times = np.linspace(0.0, t_final, n_ref + 1)
-    w = np.concatenate([[0.0], np.cumsum(dw_np)])
+    times = jnp.linspace(0.0, t_final, n_ref + 1)
+    w = jnp.concatenate(
+        [jnp.array([0.0], dtype=dw_fine.dtype),
+         jnp.cumsum(dw_fine)])
     return n_ref, times, w, dw_fine
 
 def _coarse_grid_layout(n_ref: int, t_final: float, delta_coarse: float):
@@ -442,15 +444,15 @@ def _parabolic_coeffs_list(
         block_size: int,
         delta_coarse: float):
     """Build parabolic coefficient tuples for each coarse interval."""
-    coeffs_list = []
+    rows = []
     for k in range(num_steps):
         left_idx = k * block_size
         right_idx = (k + 1) * block_size
-        coeffs_list.append(
-            parabolic_coeffs_from_fine_window(
-                times, w, left_idx, right_idx, delta_coarse)
+        w0, w_delta, i_delta = parabolic_coeffs_from_fine_window(
+            times, w, left_idx, right_idx, delta_coarse
         )
-    return coeffs_list
+        rows.append(jnp.stack([w0, w_delta, i_delta], axis=0))
+    return jnp.stack(rows, axis=0)
 
 def _coarse_increments_from_fine(dw_fine, num_steps: int, block_size: int):
     """Sum fine increments into coarse-step increments."""

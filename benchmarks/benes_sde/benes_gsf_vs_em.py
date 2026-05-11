@@ -25,9 +25,9 @@ main
 from pathlib import Path
 import sys
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-root_str = str(_REPO_ROOT)
-if root_str not in sys.path:
-    sys.path.insert(0, root_str)
+ROOT_STR = str(_REPO_ROOT)
+if ROOT_STR not in sys.path:
+    sys.path.insert(0, ROOT_STR)
 
 from typing import Optional
 from dataclasses import dataclass
@@ -46,16 +46,20 @@ from tqdm.auto import tqdm
 from benchmarks.benchmark_utils import (
     EM_GSF_ERROR_SERIES_SPECS,
     POWER_LAW_FIT_HELP_TEXT,
+    chunked_accumulate_keys,
+    coeffs_array_to_list,
     euler_maruyama_from_increments,
     fit_power_laws_for_error_series,
     format_power_law_text,
     plot_error_data_series,
     plot_fitted_error_series,
     prepare_coupled_discretization,
+    resolve_mc_chunk_size,
     resolve_mc_run_seed,
     strong_errors_from_paths,
 )
 
+from benchmarks.benes_sde.benes_dynamics import drift, diffusion
 
 from prob_sde import (
     brownian_and_parabolic_coeffs,
@@ -70,6 +74,12 @@ from prob_sde.solvers.sde_solver import (
 )
 
 from prob_sde.filtering.sde.gaussian_sde_filter import GaussianSDEFilterConfig
+
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class TimeConfig:
@@ -92,23 +102,31 @@ class TimeConfig:
         Return the effective step size for path plotting.
     """
     t_final: float = 1.0
-    deltas: tuple[float, ...] = (2.0**-1, 2.0**-2, 2.0**-3, 2.0**-4, 2.0 ** -5)
+    deltas: tuple[float, ...] = (
+        2.0**-3, 2.0**-4 ,2.0**-5, 2.0**-6, 2.0**-7)
     delta_for_path: Optional[float] = 0.01
+
 
 @dataclass(frozen=True)
 class MonteCarloConfig:
     """
     Monte Carlo sampling configuration for error statistics.
-    
+
     Attributes
     ----------
     num_sample_paths : int
         Number of independent samples used per step size.
     seed : int | None
         Run-level random seed. If ``None``, a fresh seed is generated.
+    chunk_size : int | None
+        Optional number of seeds per device batch for chunked ``vmap``/``jit``.
+        If ``None``, :func:`benchmarks.benchmark_utils.resolve_mc_chunk_size`
+        chooses a default from ``num_sample_paths``.
     """
-    num_sample_paths: int = 500
+    num_sample_paths: int = 2000
     seed: Optional[int] = None
+    chunk_size: Optional[int] = None
+
 
 @dataclass(frozen=True)
 class SolverConfig:
@@ -130,6 +148,8 @@ class SolverConfig:
     sample_posterior_position: bool = False
     variance_floor: float = 1e-12
     initial_cov_scale: float = 1e-8
+    posterior_ekf_mode: str = "ekf1"
+
 
 @dataclass(frozen=True)
 class ExperimentConfig:
@@ -160,14 +180,9 @@ class ExperimentConfig:
     solver: SolverConfig = SolverConfig()
 
 
-def drift(x, _t):
-    """Benes drift: tanh(x)."""
-    return jnp.tanh(x)
-
-
-def diffusion(_x, _t):
-    """Benes diffusion: constant one."""
-    return jnp.array(1.0)
+# -----------------------------------------------------------------------------
+# GSF solver wiring (facade)
+# -----------------------------------------------------------------------------
 
 
 def gsf_path_coupled_with_solver(
@@ -175,7 +190,7 @@ def gsf_path_coupled_with_solver(
         cfg,
         delta,
         num_steps,
-        coeffs_list):
+        coeffs):
     """Simulate one GSF trajectory via `sde_solver` with coupled coefficients.
 
     This helper runs the unified facade (`solve_sde`) with method `"gsf"` on a
@@ -193,8 +208,9 @@ def gsf_path_coupled_with_solver(
         Coarse time-step size.
     num_steps : int
         Number of coarse integration steps on `[0, t_final]`.
-    coeffs_list : Sequence[tuple]
-        Per-step parabolic Brownian coefficients (length must equal `num_steps`).
+    coeffs : jax.Array
+        Per-step parabolic Brownian coefficients with shape ``(num_steps, 3)``
+        and columns ``(w0, w_delta, i_delta)``.
 
     Returns
     -------
@@ -213,7 +229,7 @@ def gsf_path_coupled_with_solver(
     run_cfg = GSFRunConfig(
         prior_scale=run_cfg.prior_scale,
         filter_config=run_cfg.filter_config,
-        coeffs_list=coeffs_list,
+        coeffs_list=coeffs_array_to_list(coeffs),
         return_uncertainty=False,
     )
 
@@ -226,6 +242,7 @@ def gsf_path_coupled_with_solver(
     result = solve_sde(root_key, sde, solver_cfg)
     return result.trajectory
 
+
 def _build_gsf_run_config(cfg):
     """Build facade-level GSF run configuration from experiment settings."""
     return GSFRunConfig(
@@ -236,10 +253,14 @@ def _build_gsf_run_config(cfg):
             variance_floor=cfg.solver.variance_floor,
             initial_cov_scale=cfg.solver.initial_cov_scale,
             return_beta_coeffs=False,
-            ekf_mode="ekf1",
+            ekf_mode=cfg.solver.posterior_ekf_mode,
         ),
         return_uncertainty=False,
     )
+
+# -----------------------------------------------------------------------------
+# One seed: coupled paths and scalar errors
+# -----------------------------------------------------------------------------
 
 def one_seed_errors(root_key, delta, cfg):
     """
@@ -298,47 +319,98 @@ def _simulate_coupled_paths(root_key, delta, cfg, disc):
         cfg,
         delta,
         disc.num_steps,
-        disc.coeffs_list,
+        disc.coeffs,
     )
     return x_ref, x_em, x_gsf
 
 
-def estimate_errors_for_delta(base_key, delta, cfg, progress_bar=None):
-    """Estimate Monte Carlo mean strong errors for one coarse step size.
+# -----------------------------------------------------------------------------
+# Vectorized/Chunked Monte Carlo
+# -----------------------------------------------------------------------------
 
-    For each Monte Carlo seed, this function builds coupled reference/coarse data,
-    simulates EM and facade-based GSF trajectories, computes strong local/global
-    absolute errors, and returns sample means across seeds.
+
+def estimate_errors_for_delta(base_key, delta, cfg, progress_bar=None):
+    """Monte Carlo mean strong errors for one coarse step size.
+
+    For each PRNG seed derived from ``base_key``, builds a coupled fine/coarse
+    Brownian discretization, simulates fine-step reference EM, coarse EM, and
+    parabolic-coupled GSF, and forms strong local/global absolute errors versus
+    the reference path. Sample means are taken over ``cfg.mc.num_sample_paths``
+    seeds.
+
+    Seeds are processed in contiguous chunks. Chunk size comes from
+    ``resolve_mc_chunk_size`` using ``cfg.mc.num_sample_paths`` and optional
+    ``cfg.mc.chunk_size``; within each chunk, per-seed errors are summed using
+    ``jax.vmap`` and ``jax.jit`` (see ``_batch_seed_sum`` and
+    ``chunked_accumulate_keys`` in ``benchmarks.benchmark_utils``).
 
     Parameters
     ----------
     base_key : jax.Array
-        Root PRNG key for the Monte Carlo batch at this step size.
+        Root PRNG key for the full Monte Carlo batch at this step size.
     delta : float
-        Coarse step size used to define the discretization level.
+        Coarse step size for EM and GSF (and for the coupled discretization).
     cfg : ExperimentConfig
-        Experiment configuration (time horizon, number of samples, solver options).
-    progress_bar : object | None, optional
-        Optional progress-bar object exposing `.update(int)`; updated once per seed.
+        Experiment configuration (time horizon, ``mc`` sampling, solver options).
+    progress_bar : object, optional
+        If given, must expose ``update(int)``. The total passed to ``update`` per
+        call is the number of seeds finished in that chunk (not necessarily one).
 
     Returns
     -------
     tuple[float, float, float, float]
-        `(em_local, em_global, gsf_local, gsf_global)` Monte Carlo mean errors.
+        ``(em_local, em_global, gsf_local, gsf_global)``, sample means of the four
+        strong-error scalars across all seeds.
+
+    See Also
+    --------
+    one_seed_errors
+        Single-seed error tuple before stacking and batching.
     """
     keys = jax.random.split(base_key, cfg.mc.num_sample_paths)
-    vals = []
-    for i in range(cfg.mc.num_sample_paths):
-        vals.append(one_seed_errors(keys[i], delta, cfg))
-        if progress_bar is not None:
-            progress_bar.update(1)
-    arr = np.asarray(vals, dtype=float)
 
-    em_local = float(np.mean(arr[:, 0]))
-    em_global = float(np.mean(arr[:, 1]))
-    gsf_local = float(np.mean(arr[:, 2]))
-    gsf_global = float(np.mean(arr[:, 3]))
+    chunk_size = resolve_mc_chunk_size(
+        cfg.mc.num_sample_paths, cfg.mc.chunk_size)
+
+    batch_seed_sum_jit = jax.jit(
+        lambda ks: _batch_seed_sum(ks, delta, cfg)
+    )
+    total = chunked_accumulate_keys(
+        keys,
+        chunk_size,
+        batch_seed_sum_jit,
+        progress_bar=progress_bar,
+    )
+    return _mean_errors_from_sum(total, keys.shape[0])
+
+
+def _mean_errors_from_sum(total, n_samples):
+    """Convert summed error vector to scalar means tuple."""
+    means = jax.device_get(total / float(n_samples))
+    em_local, em_global, gsf_local, gsf_global = map(float, means)
     return em_local, em_global, gsf_local, gsf_global
+
+
+def _batch_seed_sum(keys, delta, cfg):
+    """Return summed error vector over one seed batch."""
+    vals = _batch_seed_errors(keys, delta, cfg)
+    return jnp.sum(vals, axis=0)
+
+
+def _batch_seed_errors(keys, delta, cfg):
+    """Vectorized one-seed errors over keys; returns shape (B, 4)."""
+    return jax.vmap(
+        lambda key_i: _one_seed_errors_stacked(key_i, delta, cfg))(keys)
+
+
+def _one_seed_errors_stacked(root_key, delta, cfg):
+    """Return one-seed errors as shape (4,) array."""
+    return jnp.stack(one_seed_errors(root_key, delta, cfg))
+
+
+# -----------------------------------------------------------------------------
+# Full experiment pipeline
+# -----------------------------------------------------------------------------
 
 
 def run_experiment(cfg):
@@ -363,11 +435,13 @@ def run_experiment(cfg):
     mc_results = _compute_mc_error_results(key_mc, cfg)
     return {**path_results, **mc_results}
 
+
 def _print_solver_settings(cfg):
     """Print EKF-related settings used by GSF (facade) and mixture (direct coupled path)."""
     gsf_run = _build_gsf_run_config(cfg)
     print("EKF settings:")
     print("  GSF posterior mode (filter_config): " + str(gsf_run.filter_config.ekf_mode))
+
 
 def _compute_path_results(key_paths, cfg):
     """
@@ -393,11 +467,11 @@ def _compute_path_results(key_paths, cfg):
     parabolic_data = brownian_and_parabolic_coeffs(
         jax.random.fold_in(key_paths, 0),
         cfg.time.t_final,
-        delta_path * delta_path,
+        delta_path ** 2,
         delta_path,
     )
     dw_coarse = parabolic_data["dw_coarse"]
-    coeffs_list = parabolic_data["coeffs_list"]
+    coeffs = parabolic_data["coeffs"]
 
     path_em = euler_maruyama_from_increments(
         drift, diffusion, dw_coarse, delta_path, cfg.x0)
@@ -406,8 +480,8 @@ def _compute_path_results(key_paths, cfg):
         key_gsf,
         cfg,
         delta_path,
-        len(coeffs_list),
-        coeffs_list,
+        int((coeffs.shape[0])),
+        coeffs,
     )
 
     return {
@@ -415,6 +489,7 @@ def _compute_path_results(key_paths, cfg):
         "path_em": np.asarray(path_em),
         "path_gsf": np.asarray(path_gsf),
     }
+
 
 def _compute_mc_error_results(key_mc, cfg):
     """
@@ -456,6 +531,12 @@ def _compute_mc_error_results(key_mc, cfg):
         **{name: np.asarray(values) for name, values in series.items()},
     }
 
+
+# -----------------------------------------------------------------------------
+# Reporting (CLI-friendly, no core numerics)
+# -----------------------------------------------------------------------------
+
+
 def plot_results(results):
     """Render and save benchmark figures for path and convergence diagnostics.
 
@@ -480,7 +561,7 @@ def plot_results(results):
         print("matplotlib is not installed. Install matplotlib to plot figures.")
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig, axes = plt.subplots(2,1, figsize=(10, 10))
     _plot_path_panel(axes[0], results)
     _plot_error_panel(axes[1], results)
 
@@ -490,6 +571,7 @@ def plot_results(results):
     plt.show()
     plt.close(fig)
     print("Saved " + out)
+
 
 def _plot_path_panel(ax, results):
     """Plot coupled EM and GSF sample paths."""
@@ -506,6 +588,7 @@ def _plot_path_panel(ax, results):
     ax.set_title("Benes SDE: EM vs GSF sample paths (coupled noise)")
     ax.grid(True, alpha=0.3)
     ax.legend()
+
 
 def _plot_error_panel(ax, results):
     """Plot strong errors and fitted power laws on log-log axes."""
@@ -609,6 +692,12 @@ def print_error_comparison_table(results):
             winner(gsf_global[i], em_global[i]),
         )
         print(row(values))
+
+
+# -----------------------------------------------------------------------------
+# Entry point
+# -----------------------------------------------------------------------------
+
 
 def main():
     """Run Benes SDE EM-vs-GSF benchmark and plots."""

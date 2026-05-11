@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+
+## [0.1.4] - 2026-05-11
+
+### Added
+- Chunked vectorized Monte Carlo in Benes EM vs GSF benchmark (`benchmarks/benes_sde/benes_gsf_vs_em.py`): `jax.vmap` over seeds with configurable chunk size and optional JIT on the per-chunk sum kernel.
+-Shared helpers in `benchmarks/benchmark_utils.py` for parabolic coefficients as a (num_steps, 3) array (coeffs) plus coeffs_array_to_list for legacy solver APIs.
+- Automatic chunk-size policy (and optional override via MonteCarloConfig.chunk_size) for large N / small delta runs in `benes_gsf_vs_em.py`. 
+
+### Changed
+- `benes_gsf_vs_em.py`:
+    - migrate coupled parabolic coefficients from list-of-tuples to array form internally; convert to list only at the GSF facade boundary.
+    - refactor `estimate_errors_for_delta` into smaller helpers (chunked sums, mean conversion) to limit local complexity and support article-scale sample counts.
+    - module layout reorganized with section headers for configuration, SDE dynamics, GSF wiring, Monte Carlo, experiment orchestration, and reporting.
+
+- `src/prob_sde/brownian/brownian.py`: JAX-native fine-path and coefficient construction where needed for transform compatibility; `_parabolic_coeffs_list` now returns stacked coefficients `(num_steps, 3)`.
+
+### Fixed
+-
+
+
+### Notes
+- Profiling harnesses from 0.1.1–0.1.3 remain the performance baseline; this release improves a major Benes benchmark hot path and Brownian coefficient representation. Remaining ensemble-level cost drivers are documented in the README performance note.
+
 ## [0.1.3] - 2026-05-08
 
 ### Added

@@ -29,13 +29,7 @@ from prob_sde.solvers.sde_solver import (
     MarginalisedRunConfig, solve_sde,
 )
 from prob_sde import SDESpec, piecewise_parabolic_brownian
-
-# define drift/diffusion/x0 like benchmarks
-def drift(x, t):
-    return jax.numpy.tanh(x)
-
-def diffusion(_x, _t):
-    return jnp.array(1.0)
+from benchmarks.benes_sde.benes_dynamics import drift, diffusion
 
 def time_call(name, fn, warmup=1, repeats=5):
     for _ in range(warmup):

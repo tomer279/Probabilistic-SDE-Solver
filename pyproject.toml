@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prob-sde"
-version = "0.1.3"
+version = "0.1.4"
 description = "Probabilistic SDE solvers via piecewise differentiable Brownian approximation and Gaussian ODE filters"
 readme = "README.md"
 license = { text = "MIT" }
